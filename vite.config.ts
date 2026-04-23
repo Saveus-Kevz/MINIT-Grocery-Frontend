@@ -16,10 +16,11 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      host: '0.0.0.0',
       // Proxy API and uploads to Spring Boot backend
       proxy: {
         '/api': {
-          target: 'http://localhost:8086',
+          target: process.env.DOCKER_ENV === 'true' ? 'http://backend:8086' : 'http://localhost:8086',
           changeOrigin: true,
         },
       },

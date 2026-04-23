@@ -36,7 +36,9 @@ import { generateProductImage } from "./services/geminiService";
 import { ChangePasswordModal } from "./components/ChangePasswordModal";
 import { Lock } from "lucide-react";
 
-const API_BASE = "http://localhost:8086/api";
+const API_BASE = window.location.hostname === 'localhost'
+    ? 'http://localhost:8086/api'  // For local dev outside Docker
+    : '/api';  // For Docker (uses the proxy)
 
 // Helper to get full image URL
 const BACKEND_URL = "http://localhost:8086";
