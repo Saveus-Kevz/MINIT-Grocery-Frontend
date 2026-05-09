@@ -44,8 +44,20 @@ export function ChangePasswordModal({
 
         if (!newPassword) {
             errors.newPassword = "New password is required";
-        } else if (newPassword.length < 6) {
-            errors.newPassword = "Password must be at least 6 characters";
+        } else if (newPassword.length < 8) {
+            errors.newPassword = "Password must be at least 8 characters";
+        } else if (newPassword.length > 100) {
+            errors.newPassword = "Password must be less than 100 characters";
+        } else if (/\s/.test(newPassword)) {
+            errors.newPassword = "Password cannot contain spaces";
+        } else if (!/(?=.*[0-9])/.test(newPassword)) {
+            errors.newPassword = "Password must contain at least one number (0-9)";
+        } else if (!/(?=.*[a-z])/.test(newPassword)) {
+            errors.newPassword = "Password must contain at least one lowercase letter (a-z)";
+        } else if (!/(?=.*[A-Z])/.test(newPassword)) {
+            errors.newPassword = "Password must contain at least one uppercase letter (A-Z)";
+        } else if (!/(?=.*[@#$%^&+=])/.test(newPassword)) {
+            errors.newPassword = "Password must contain at least one special character (@#$%^&+=)";
         }
 
         if (!confirmPassword) {
@@ -187,7 +199,7 @@ export function ChangePasswordModal({
                                                 ? "border-red-500 focus:ring-red-500/20"
                                                 : "border-[#6C35D4]/10 focus:border-[#6C35D4]"
                                         )}
-                                        placeholder="Enter new password (min. 6 characters)"
+                                        placeholder="Enter new password"
                                         value={newPassword}
                                         onChange={(e) => {
                                             setNewPassword(e.target.value);
@@ -259,11 +271,27 @@ export function ChangePasswordModal({
                                 <ul className="text-xs text-gray-500 space-y-1">
                                     <li className="flex items-center gap-2">
                                         <CheckCircle2 className="w-3 h-3 text-green-500" />
-                                        Minimum 6 characters
+                                        Minimum 8 characters, maximum 100 characters
                                     </li>
                                     <li className="flex items-center gap-2">
                                         <CheckCircle2 className="w-3 h-3 text-green-500" />
-                                        Can include letters, numbers, and symbols
+                                        At least one uppercase letter (A-Z)
+                                    </li>
+                                    <li className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                        At least one lowercase letter (a-z)
+                                    </li>
+                                    <li className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                        At least one number (0-9)
+                                    </li>
+                                    <li className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                        At least one special character (@#$%^&+=)
+                                    </li>
+                                    <li className="flex items-center gap-2">
+                                        <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                        No spaces allowed
                                     </li>
                                 </ul>
                             </div>

@@ -27,7 +27,8 @@ import {
   Upload,
   CreditCard,
   Minus,
-  Plus as PlusIcon
+  Plus as PlusIcon,
+  TrendingUp
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, formatCurrency, formatDate } from "./lib/utils";
@@ -45,6 +46,8 @@ const BACKEND_URL = "http://localhost:8086";
 
 const getImageUrl = (imageUrl?: string) => {
   if (!imageUrl) return undefined;
+  // Don't modify blob URLs - they're local previews
+  if (imageUrl.startsWith('blob:')) return imageUrl;
   if (imageUrl.startsWith('http')) return imageUrl;
   if (imageUrl.startsWith('data:')) return imageUrl;
   if (imageUrl.startsWith('/uploads')) return `${BACKEND_URL}${imageUrl}`;
@@ -58,6 +61,9 @@ export function App() {
     return saved ? JSON.parse(saved) : null;
   });
   const [loginData, setLoginData] = useState({username: "", password: ""});
+  const [tempPhotoFile, setTempPhotoFile] = useState<File | null>(null);
+  const [tempPhotoPreview, setTempPhotoPreview] = useState<string | null>(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const [activeTab, setActiveTab] = useState<"home" | "products" | "users" | "checkout" | "reports">(() => {
@@ -96,6 +102,7 @@ export function App() {
   const [newResumeFile, setNewResumeFile] = useState<File | null>(null);
   const [newBarangayFile, setNewBarangayFile] = useState<File | null>(null);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
 
 
@@ -114,6 +121,10 @@ export function App() {
     gender: "MALE" as string
   });
 
+  const [recentSales, setRecentSales] = useState<SaleResponse[]>([]);
+  const [topProducts, setTopProducts] = useState<{productId: number, productName: string, totalSold: number}[]>([]);
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+
   const formatGender = (gender?: string) => {
     if (!gender) return "Not specified";
     switch (gender) {
@@ -126,6 +137,31 @@ export function App() {
       default:
         return gender;
     }
+  };
+
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 8) {
+      return "Password must be at least 8 characters";
+    }
+    if (password.length > 100) {
+      return "Password must be less than 100 characters";
+    }
+    if (/\s/.test(password)) {
+      return "Password cannot contain spaces";
+    }
+    if (!/(?=.*[0-9])/.test(password)) {
+      return "Password must contain at least one number";
+    }
+    if (!/(?=.*[a-z])/.test(password)) {
+      return "Password must contain at least one lowercase letter";
+    }
+    if (!/(?=.*[A-Z])/.test(password)) {
+      return "Password must contain at least one uppercase letter";
+    }
+    if (!/(?=.*[@#$%^&+=])/.test(password)) {
+      return "Password must contain at least one special character (@#$%^&+=)";
+    }
+    return null;
   };
 
   const [emailExists, setEmailExists] = useState(false);
@@ -342,6 +378,79 @@ export function App() {
     }
   };
 
+  // Fetch recent sales for homepage
+  const fetchRecentSales = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`${API_BASE}/sales?page=0&size=5`, {
+        headers: { "Authorization": `Bearer ${currentUser.token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Handle both paginated and non-paginated responses
+        const sales = Array.isArray(data) ? data : data.content || [];
+        setRecentSales(sales.filter((s: SaleResponse) => s.status === "COMPLETED").slice(0, 5));
+      }
+    } catch (err) {
+      console.error("Failed to fetch recent sales", err);
+    }
+  }, [currentUser]);
+
+
+  // Fetch most sold products
+  const fetchTopProducts = useCallback(async () => {
+    if (!currentUser) return;
+    try {
+      // Fetch all sales and calculate manually
+      const res = await fetch(`${API_BASE}/sales?size=100`, {
+        headers: { "Authorization": `Bearer ${currentUser.token}` }
+      });
+      if (res.ok) {
+        const sales = await res.json();
+        const salesList = Array.isArray(sales) ? sales : sales.content || [];
+
+        // Calculate top products
+        const productSales: {[key: number]: {name: string, total: number}} = {};
+        salesList.forEach((sale: SaleResponse) => {
+          if (sale.status === "COMPLETED") {
+            sale.items.forEach(item => {
+              if (!productSales[item.productId]) {
+                productSales[item.productId] = { name: item.productName, total: 0 };
+              }
+              productSales[item.productId].total += item.quantity;
+            });
+          }
+        });
+
+        const top5 = Object.entries(productSales)
+            .map(([id, data]) => ({
+              productId: parseInt(id),
+              productName: data.name,
+              totalSold: data.total
+            }))
+            .sort((a, b) => b.totalSold - a.totalSold)
+            .slice(0, 5);
+
+        setTopProducts(top5);
+      }
+    } catch (err) {
+      console.error("Failed to fetch top products", err);
+    }
+  }, [currentUser]);
+
+// Combined fetch for homepage stats
+  const fetchHomeStats = useCallback(async () => {
+    if (!currentUser || activeTab !== "home") return;
+    setIsLoadingStats(true);
+    try {
+      await Promise.all([fetchRecentSales(), fetchTopProducts()]);
+    } catch (err) {
+      console.error("Failed to fetch home stats", err);
+    } finally {
+      setIsLoadingStats(false);
+    }
+  }, [currentUser, activeTab, fetchRecentSales, fetchTopProducts]);
+
   const openVoidModal = (saleId: number) => {
     setVoidSaleId(saleId);
     setVoidReason("");
@@ -531,6 +640,17 @@ export function App() {
 
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Only block zero/negative stock on creation
+    if (formData.stockQuantity <= 0) {
+      setModalError("Initial stock quantity must be greater than 0");
+      return;
+    }
+
+    if (formData.price <= 0) {
+      setModalError("Price must be greater than 0");
+      return;
+    }
+
     setLoading(true);
     setModalError(null);
 
@@ -638,6 +758,13 @@ export function App() {
 
   const handleUpdateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Only validate price on update (stock can be zero)
+    if (formData.price <= 0) {
+      setError("Price must be greater than 0");
+      return;
+    }
+
     if (!editingProduct) return;
     setLoading(true);
 
@@ -762,6 +889,14 @@ export function App() {
   const handleRegisterUser = async (e: React.FormEvent) => {
     if (!currentUser) return;
     e.preventDefault();
+    const passwordValidationError = validatePassword(userFormData.password);
+    if (passwordValidationError) {
+      setPasswordError(passwordValidationError);
+      return;
+    }
+    // Clear any previous password error
+    setPasswordError(null);
+
     setLoading(true);
     try {
       // 1. Create user without files
@@ -910,6 +1045,31 @@ export function App() {
       });
 
       if (!res.ok) throw new Error("Failed to update user");
+
+      // Upload new photo if one was selected
+      // Upload new photo if one was selected in preview
+      if (tempPhotoPreview && editingUser) {
+        // Convert blob URL back to File
+        const response = await fetch(tempPhotoPreview);
+        const blob = await response.blob();
+        const file = new File([blob], "photo.jpg", { type: blob.type });
+
+        const photoFormData = new FormData();
+        photoFormData.append("file", file);
+        const photoRes = await fetch(`${API_BASE}/users/${editingUser.id}/photo`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${currentUser.token}` },
+          body: photoFormData,
+        });
+        if (photoRes.ok) {
+          const imageUrl = await photoRes.text();
+          setEditUserForm(prev => ({...prev, photo: imageUrl}));
+        }
+
+        // Clean up preview
+        URL.revokeObjectURL(tempPhotoPreview);
+        setTempPhotoPreview(null);
+      }
 
       // Safely parse JSON – some responses might be empty (e.g., after deletion)
       let updatedUser = null;
@@ -1153,6 +1313,12 @@ export function App() {
       fetchReports();
     }
   }, [activeTab, fetchReports]);
+
+  useEffect(() => {
+    if (activeTab === "home") {
+      fetchHomeStats();
+    }
+  }, [activeTab, fetchHomeStats]);
 
 
   if (!currentUser) {
@@ -1837,9 +2003,126 @@ export function App() {
               )}
               {activeTab === "home" && (
                   <div className="space-y-8">
+                    {/* Welcome Section */}
+                    <div className="bg-gradient-to-r from-[#6C35D4] to-[#B28DFF] rounded-3xl p-8 text-white">
+                      <h2 className="text-3xl font-bold mb-2">
+                        Welcome back, {users.find(u => u.id === currentUser?.id)?.fullName || currentUser?.username}! 👋
+                      </h2>
+                      <p className="text-white/80">Here's what's happening with your store today.</p>
+                    </div>
+
+                    {/* Stats Grid - 2 columns */}
+                    <div className="grid grid-cols-2 gap-6">
+                      {/* Recently Sold Items */}
+                      <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
+                        <div className="flex items-center justify-between mb-6">
+                          <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                            <Clock className="w-5 h-5 text-[#6C35D4]" />
+                            Recently Sold
+                          </h3>
+                          <button
+                              onClick={() => setActiveTab("reports")}
+                              className="text-[10px] font-bold text-[#6C35D4] uppercase tracking-widest hover:underline"
+                          >
+                            View All →
+                          </button>
+                        </div>
+
+                        {isLoadingStats ? (
+                            <div className="flex justify-center py-8">
+                              <Loader2 className="w-6 h-6 animate-spin text-[#6C35D4]" />
+                            </div>
+                        ) : recentSales.length === 0 ? (
+                            <div className="text-center py-8 text-gray-400">
+                              <ShoppingBag className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                              <p className="text-sm">No sales yet</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                              {recentSales.map((sale) => (
+                                  <div key={sale.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-2xl">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-bold text-gray-900">Sale #{sale.id}</p>
+                                      <p className="text-[10px] text-gray-400">{formatDate(sale.saleDate)}</p>
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {sale.items.slice(0, 2).map((item, idx) => (
+                                            <span key={idx} className="text-[9px] bg-white px-2 py-0.5 rounded-full text-gray-600">
+                        {item.productName} ({item.quantity})
+                      </span>
+                                        ))}
+                                        {sale.items.length > 2 && (
+                                            <span className="text-[9px] bg-white px-2 py-0.5 rounded-full text-gray-400">
+                        +{sale.items.length - 2} more
+                      </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="text-right ml-4">
+                                      <p className="font-bold text-[#6C35D4]">{formatCurrency(sale.totalAmount)}</p>
+                                      <p className="text-[9px] text-gray-400">{sale.cashierName}</p>
+                                    </div>
+                                  </div>
+                              ))}
+                            </div>
+                        )}
+                      </div>
+
+                      {/* Most Sold Items */}
+                      <div className="bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
+                        <div className="flex items-center justify-between mb-6">
+                          <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                            <TrendingUp className="w-5 h-5 text-[#6C35D4]" />
+                            Most Sold Items
+                          </h3>
+                          <button
+                              onClick={() => setActiveTab("reports")}
+                              className="text-[10px] font-bold text-[#6C35D4] uppercase tracking-widest hover:underline"
+                          >
+                            View Reports →
+                          </button>
+                        </div>
+
+                        {isLoadingStats ? (
+                            <div className="flex justify-center py-8">
+                              <Loader2 className="w-6 h-6 animate-spin text-[#6C35D4]" />
+                            </div>
+                        ) : topProducts.length === 0 ? (
+                            <div className="text-center py-8 text-gray-400">
+                              <Package className="w-10 h-10 mx-auto mb-2 opacity-20" />
+                              <p className="text-sm">No sales data yet</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                              {topProducts.map((product, index) => (
+                                  <div key={product.productId} className="flex items-center gap-4">
+                                    <div className={cn(
+                                        "w-8 h-8 rounded-xl flex items-center justify-center font-bold text-sm",
+                                        index === 0 ? "bg-yellow-100 text-yellow-600" :
+                                            index === 1 ? "bg-gray-100 text-gray-500" :
+                                                index === 2 ? "bg-orange-100 text-orange-600" :
+                                                    "bg-gray-50 text-gray-400"
+                                    )}>
+                                      #{index + 1}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-bold text-gray-900 truncate">{product.productName}</p>
+                                      <p className="text-[10px] text-gray-400">Total sold</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="font-bold text-[#6C35D4] text-lg">{product.totalSold}</p>
+                                      <p className="text-[9px] text-gray-400">units</p>
+                                    </div>
+                                  </div>
+                              ))}
+                            </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Recently Added Items - Keep your existing section */}
                     <section>
                       <h2 className="text-2xl font-bold text-gray-900 mb-6 flex items-center gap-2">
-                        <Clock className="w-6 h-6 text-[#6C35D4]"/>
+                        <Package className="w-6 h-6 text-[#6C35D4]" />
                         Recently Added Items
                       </h2>
                       <div className="grid grid-cols-4 gap-4">
@@ -1871,30 +2154,12 @@ export function App() {
                                 )}
                               </div>
                               <div className="font-bold text-sm text-gray-900 line-clamp-1">{p.name}</div>
-                              <div
-                                  className="text-[10px] font-bold text-[#6C35D4] uppercase tracking-widest mt-1">{formatCurrency(p.price)}</div>
+                              <div className="text-[10px] font-bold text-[#6C35D4] uppercase tracking-widest mt-1">{formatCurrency(p.price)}</div>
                             </div>
                         ))}
                       </div>
                     </section>
 
-                    <section>
-                      <button
-                          onClick={() => setActiveTab("users")}
-                          className="w-full bg-[#6C35D4] text-white p-8 rounded-[3rem] flex items-center justify-between group hover:bg-[#4B2491] transition-all"
-                      >
-                        <div className="flex items-center gap-6">
-                          <div className="w-16 h-16 bg-white/20 rounded-[2rem] flex items-center justify-center">
-                            <UsersIcon className="w-8 h-8"/>
-                          </div>
-                          <div className="text-left">
-                            <h3 className="text-2xl font-bold">Staff Management</h3>
-                            <p className="text-white/60 text-sm">View cashier users and custodial staff</p>
-                          </div>
-                        </div>
-                        <ChevronRight className="w-8 h-8 group-hover:translate-x-2 transition-transform"/>
-                      </button>
-                    </section>
                   </div>
               )}
 
@@ -2754,11 +3019,58 @@ export function App() {
                             <input
                                 required
                                 type="password"
-                                className="w-full bg-[#F2EDFF]/30 border border-[#6C35D4]/10 rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#6C35D4]/20 focus:border-[#6C35D4] transition-all font-medium"
+                                className={`w-full bg-[#F2EDFF]/30 border rounded-2xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#6C35D4]/20 focus:border-[#6C35D4] transition-all font-medium ${
+                                    passwordError ? 'border-red-500' : 'border-[#6C35D4]/10'
+                                }`}
                                 value={userFormData.password}
-                                onChange={(e) => setUserFormData(prev => ({...prev, password: e.target.value}))}
+                                onChange={(e) => {
+                                  setUserFormData(prev => ({...prev, password: e.target.value}));
+                                  // Clear error when user starts typing
+                                  if (passwordError) setPasswordError(null);
+                                }}
                             />
+                            {/* Show inline error message */}
+                            {passwordError && (
+                                <p className="text-red-500 text-xs mt-1 flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" />
+                                  {passwordError}
+                                </p>
+                            )}
+
+                            {/* Password requirements hint */}
+                            <div className="bg-gray-50 rounded-xl p-3 mt-2">
+                              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+                                Password Requirements:
+                              </p>
+                              <ul className="text-[10px] text-gray-500 space-y-1">
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  Minimum 8 characters, maximum 100 characters
+                                </li>
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  At least one uppercase letter (A-Z)
+                                </li>
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  At least one lowercase letter (a-z)
+                                </li>
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  At least one number (0-9)
+                                </li>
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  At least one special character (@#$%^&+=)
+                                </li>
+                                <li className="flex items-center gap-2">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                  No spaces allowed
+                                </li>
+                              </ul>
+                            </div>
                           </div>
+
 
                           {/* File Uploads */}
                           <div className="space-y-2">
@@ -3077,56 +3389,47 @@ export function App() {
                         {/* Photo upload */}
                         <div className="col-span-2 space-y-1">
                           <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Photo</label>
-                          {editUserForm.photo && (
+
+                          {/* Show preview (temp preview takes priority) */}
+                          {(tempPhotoPreview || editUserForm.photo) && (
                               <div className="mb-3">
                                 <div
                                     className="w-20 h-20 rounded-2xl overflow-hidden border border-gray-200 cursor-zoom-in hover:scale-105 transition-transform"
-                                    onClick={() => setSelectedImage(getImageUrl(editUserForm.photo))}
+                                    onClick={() => setSelectedImage(tempPhotoPreview || getImageUrl(editUserForm.photo || ''))}
                                 >
                                   <img
-                                      src={getImageUrl(editUserForm.photo)}
+                                      src={tempPhotoPreview || getImageUrl(editUserForm.photo || '')}
                                       alt="Current photo"
                                       className="w-full h-full object-cover"
                                       referrerPolicy="no-referrer"
                                   />
                                 </div>
+                                {tempPhotoPreview && (
+                                    <p className="text-xs text-amber-600 mt-1">⚠️ New photo selected - click Save to apply</p>
+                                )}
                               </div>
                           )}
+
                           <input
                               type="file"
                               accept="image/*"
                               className="w-full text-xs text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#F2EDFF] file:text-[#6C35D4] hover:file:bg-[#E5DBFF]"
-                              onChange={async (e) => {
+                              onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file && editingUser) {
-                                  const formData = new FormData();
-                                  formData.append("file", file);
-                                  const res = await fetch(`${API_BASE}/users/${editingUser.id}/photo`, {
-                                    method: "POST",
-                                    headers: {"Authorization": `Bearer ${currentUser.token}`},
-                                    body: formData,
-                                  });
-                                  if (res.ok) {
-                                    const imageUrl = await res.text();
-                                    setEditUserForm(prev => ({...prev, photo: imageUrl}));
-                                    setSuccess("Photo uploaded successfully");
-
-                                    // ✅ ADD THIS LINE - Refresh the users list
-                                    const userRes = await fetch(`${API_BASE}/users`, {
-                                      headers: {"Authorization": `Bearer ${currentUser.token}`}
-                                    });
-                                    if (userRes.ok) {
-                                      const userData = await userRes.json();
-                                      setUsers(userData);
-                                    }
-                                  } else {
-                                    const error = await res.text();
-                                    setError(error);
+                                  // Clean up old preview
+                                  if (tempPhotoPreview) {
+                                    URL.revokeObjectURL(tempPhotoPreview);
                                   }
+                                  // Create NEW preview - DON'T upload yet
+                                  const previewUrl = URL.createObjectURL(file);
+                                  setTempPhotoPreview(previewUrl);
                                 }
                               }}
                           />
-                          {editUserForm.photo && (
+
+                          {/* Show remove button for existing photo (not temp preview) */}
+                          {editUserForm.photo && !tempPhotoPreview && (
                               <button
                                   type="button"
                                   onClick={async () => {
@@ -3137,12 +3440,11 @@ export function App() {
                                           "Content-Type": "application/json",
                                           "Authorization": `Bearer ${currentUser.token}`
                                         },
-                                        body: JSON.stringify({photoUrl: ""})  // Send empty string to trigger deletion
+                                        body: JSON.stringify({photoUrl: ""})
                                       });
                                       if (res.ok) {
                                         setEditUserForm(prev => ({...prev, photo: null}));
                                         setSuccess("Photo removed successfully");
-
                                         // Refresh users list
                                         const userRes = await fetch(`${API_BASE}/users`, {
                                           headers: {"Authorization": `Bearer ${currentUser.token}`}
@@ -3159,6 +3461,22 @@ export function App() {
                                   className="mt-2 px-4 py-2 bg-red-50 text-red-500 rounded-xl text-xs font-bold hover:bg-red-100 transition-all"
                               >
                                 Remove Photo
+                              </button>
+                          )}
+
+                          {/* Show cancel selection button for temp preview */}
+                          {tempPhotoPreview && (
+                              <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (tempPhotoPreview) {
+                                      URL.revokeObjectURL(tempPhotoPreview);
+                                    }
+                                    setTempPhotoPreview(null);
+                                  }}
+                                  className="mt-2 px-4 py-2 bg-gray-50 text-gray-600 rounded-xl text-xs font-bold hover:bg-gray-100 transition-all"
+                              >
+                                Cancel Selection
                               </button>
                           )}
                         </div>
@@ -3290,7 +3608,12 @@ export function App() {
                             type="button"
                             onClick={async () => {
                               setIsEditingUser(false);
-                              // Refresh users list when closing
+                              // Clean up temp preview
+                              if (tempPhotoPreview) {
+                                URL.revokeObjectURL(tempPhotoPreview);
+                                setTempPhotoPreview(null);
+                              }
+                              // Refresh users list
                               const userRes = await fetch(`${API_BASE}/users`, {
                                 headers: {"Authorization": `Bearer ${currentUser.token}`}
                               });
@@ -3635,3 +3958,4 @@ function NavItem({ icon, label, active = false, onClick }: { icon: React.ReactNo
       </button>
   );
 }
+
