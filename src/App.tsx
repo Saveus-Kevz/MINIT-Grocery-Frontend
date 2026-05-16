@@ -37,14 +37,12 @@ import { generateProductImage } from "./services/geminiService";
 import { ChangePasswordModal } from "./components/ChangePasswordModal";
 import { Lock } from "lucide-react";
 
-const API_BASE = window.location.hostname === 'localhost'
-    ? 'http://localhost:8086/api'  // For local dev outside Docker
-    : 'https://minit-grocery-backend.onrender.com/api';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8086/api';
 
 
 const BACKEND_URL = window.location.hostname === 'localhost'
     ? "http://localhost:8086"
-    : "https://mint-grocery-backend.onrender.com/api";
+    : "https://minit-grocery-backend.onrender.com";
 
 const getImageUrl = (imageUrl?: string) => {
   if (!imageUrl) return undefined;
@@ -2460,11 +2458,6 @@ export function App() {
                             return u.role === userSearch.role;
                           })
                           .map(user => {
-                            // DEBUG: Check photo URLs
-                            console.log("=== USER PHOTO DEBUG ===");
-                            console.log("User:", user.fullName);
-                            console.log("Raw photoUrl:", user.photoUrl);
-                            console.log("Full image URL:", getImageUrl(user.photoUrl));
 
                             return (
                                 <div
