@@ -39,10 +39,12 @@ import { Lock } from "lucide-react";
 
 const API_BASE = window.location.hostname === 'localhost'
     ? 'http://localhost:8086/api'  // For local dev outside Docker
-    : '/api';  // For Docker (uses the proxy)
+    : 'https://minit-grocery-backend.onrender.com/api';
 
-// Helper to get full image URL
-const BACKEND_URL = "http://localhost:8086";
+
+const BACKEND_URL = window.location.hostname === 'localhost'
+    ? "http://localhost:8086"
+    : "https://mint-grocery-backend.onrender.com/api";
 
 const getImageUrl = (imageUrl?: string) => {
   if (!imageUrl) return undefined;
