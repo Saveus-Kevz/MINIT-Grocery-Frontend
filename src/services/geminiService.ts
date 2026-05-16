@@ -1,4 +1,6 @@
-const API_BASE = "http://localhost:8086/api";
+const API_BASE = window.location.hostname === 'localhost'
+    ? "http://localhost:8086/api"
+    : "https://mint-grocery-backend.onrender.com/api";
 
 export const generateProductImage = async (productName: string): Promise<string> => {
   try {
