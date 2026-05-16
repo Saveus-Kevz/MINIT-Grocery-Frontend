@@ -1,6 +1,5 @@
-const API_BASE = window.location.hostname === 'localhost'
-    ? "http://localhost:8086/api"
-    : "https://mint-grocery-backend.onrender.com/api";
+/// <reference types="vite/client" />
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8086/api';
 
 export const generateProductImage = async (productName: string): Promise<string> => {
   try {
